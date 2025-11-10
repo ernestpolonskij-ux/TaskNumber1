@@ -7,6 +7,9 @@
 #include <iomanip>
 #include <random>
 #include <chrono>
+#include <list>
+#include <deque>
+#include <typeinfo>
 
 using namespace std;
 using namespace std::chrono;
@@ -24,6 +27,66 @@ struct Person {
         finalAvg = 0.4 * avgHW + 0.6 * exam;
     }
 };
+
+template <typename Container>
+void splitUsingContainer(const string& filename) {
+    auto start = chrono::high_resolution_clock::now();
+
+    ifstream in(filename);
+    if (!in) {
+        cerr << "Cannot open: " << filename << "\n";
+        return;
+    }
+
+    string passedFile = "passed_" + filename;
+    string failedFile = "failed_" + filename;
+
+    ofstream passed(passedFile), failed(failedFile);
+
+    string header;
+    getline(in, header);
+    passed << header << "\n";
+    failed << header << "\n";
+
+    Container students;
+
+    string name, surname;
+    while (in >> name >> surname) {
+        vector<int> hw(5);
+        for (int i = 0; i < 5; i++) in >> hw[i];
+        int ex; in >> ex;
+
+        students.emplace_back(name, surname, hw, ex);
+    }
+
+    // Partition: move to two new containers
+    Container passedGroup, failedGroup;
+
+    for (auto& s : students) {
+        if (s.finalAvg >= 5.0)
+            passedGroup.push_back(move(s));
+        else
+            failedGroup.push_back(move(s));
+    }
+
+    // Write results
+    auto writeGroup = [&](Container& grp, ofstream& file) {
+        for (auto& s : grp) {
+            file << s.name << " " << s.surname;
+            for (int h : s.homework) file << " " << h;
+            file << " " << s.exam << "\n";
+        }
+        };
+
+    writeGroup(passedGroup, passed);
+    writeGroup(failedGroup, failed);
+
+    auto end = chrono::high_resolution_clock::now();
+    cout << "Processed " << filename
+        << " using container <" << typeid(Container).name() << "> in "
+        << chrono::duration_cast<chrono::milliseconds>(end - start).count() / 1000.0
+        << " seconds.\n";
+}
 
 void generateFile(const string& filename, long long count) {
     auto start = high_resolution_clock::now();
@@ -97,8 +160,19 @@ int main() {
         generateFile(f.first, f.second);
 
     cout << "\nSplitting files...\n";
-    for (auto& f : files)
+
+    for (auto& f : files) {
+        cout << "\n--- " << f.first << " ---\n";
+
+        // vector (original behavior)
         splitFile(f.first);
+
+        // list
+        splitUsingContainer<list<Person>>(f.first);
+
+        // deque
+        splitUsingContainer<deque<Person>>(f.first);
+    }
 
     cout << "\nAll tasks completed.\n";
     return 0;
