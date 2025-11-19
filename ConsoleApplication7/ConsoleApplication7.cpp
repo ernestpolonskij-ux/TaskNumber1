@@ -9,171 +9,180 @@
 #include <chrono>
 #include <list>
 #include <deque>
-#include <typeinfo>
+#include <array>
+#include <type_traits>
+#include <utility>    // for std::declval
 
 using namespace std;
 using namespace std::chrono;
 
 struct Person {
     string name, surname;
-    vector<int> homework;
-    int exam;
-    double finalAvg;
+    array<int, 5> homework{};
+    int exam{};
+    double finalAvg{};
 
-    Person(string n, string s, vector<int> hw, int ex)
-        : name(n), surname(s), homework(hw), exam(ex)
+    Person() = default;
+
+    Person(string n, string s, array<int, 5> hw, int ex)
+        : name(move(n)), surname(move(s)), homework(hw), exam(ex)
     {
-        double avgHW = accumulate(homework.begin(), homework.end(), 0.0) / homework.size();
+        double avgHW = accumulate(hw.begin(), hw.end(), 0.0) / hw.size();
         finalAvg = 0.4 * avgHW + 0.6 * exam;
     }
 };
 
-template <typename Container>
-void splitUsingContainer(const string& filename) {
-    auto start = chrono::high_resolution_clock::now();
+//
+// Safe reserve helper for C++14: detect reserve() with SFINAE + tag-dispatch (MSVC/C++14 friendly)
+//
+template<typename T>
+class has_reserve {
+private:
+    template<typename U>
+    static auto test(int) -> decltype(std::declval<U&>().reserve(size_t{}), std::true_type{});
+    template<typename>
+    static std::false_type test(...);
+public:
+    static constexpr bool value = decltype(test<T>(0))::value;
+};
 
-    ifstream in(filename);
-    if (!in) {
-        cerr << "Cannot open: " << filename << "\n";
-        return;
-    }
+template<typename C>
+void reserve_if_possible_impl(C& c, size_t n, std::true_type) { c.reserve(n); }
 
-    string passedFile = "passed_" + filename;
-    string failedFile = "failed_" + filename;
+template<typename C>
+void reserve_if_possible_impl(C&, size_t, std::false_type) { /* no-op */ }
 
-    ofstream passed(passedFile), failed(failedFile);
-
-    string header;
-    getline(in, header);
-    passed << header << "\n";
-    failed << header << "\n";
-
-    Container students;
-
-    string name, surname;
-    while (in >> name >> surname) {
-        vector<int> hw(5);
-        for (int i = 0; i < 5; i++) in >> hw[i];
-        int ex; in >> ex;
-
-        students.emplace_back(name, surname, hw, ex);
-    }
-
-    // Partition: move to two new containers
-    Container passedGroup, failedGroup;
-
-    for (auto& s : students) {
-        if (s.finalAvg >= 5.0)
-            passedGroup.push_back(move(s));
-        else
-            failedGroup.push_back(move(s));
-    }
-
-    // Write results
-    auto writeGroup = [&](Container& grp, ofstream& file) {
-        for (auto& s : grp) {
-            file << s.name << " " << s.surname;
-            for (int h : s.homework) file << " " << h;
-            file << " " << s.exam << "\n";
-        }
-        };
-
-    writeGroup(passedGroup, passed);
-    writeGroup(failedGroup, failed);
-
-    auto end = chrono::high_resolution_clock::now();
-    cout << "Processed " << filename
-        << " using container <" << typeid(Container).name() << "> in "
-        << chrono::duration_cast<chrono::milliseconds>(end - start).count() / 1000.0
-        << " seconds.\n";
+template<typename C>
+void reserve_if_possible(C& c, size_t n)
+{
+    using tag = std::integral_constant<bool, has_reserve<C>::value>;
+    reserve_if_possible_impl(c, n, tag{});
 }
 
-void generateFile(const string& filename, long long count) {
+//
+// ----------- FILE GENERATION -----------
+//
+void generateFile(const string& filename, long long count)
+{
     auto start = high_resolution_clock::now();
 
     ofstream file(filename);
+    ios::sync_with_stdio(false);
+
     random_device rd;
     mt19937 gen(rd());
     uniform_int_distribution<> dist(1, 10);
 
     file << "Name Surname HW1 HW2 HW3 HW4 HW5 Exam\n";
 
-    for (long long i = 1; i <= count; ++i) {
+    for (long long i = 1; i <= count; ++i)
+    {
         file << "Name" << i << " Surname" << i;
-        for (int j = 0; j < 5; j++) file << " " << dist(gen);
+        for (int j = 0; j < 5; j++)
+            file << " " << dist(gen);
         file << " " << dist(gen) << "\n";
     }
 
-    file.close();
-
-    auto end = high_resolution_clock::now();
-    cout << "Generated " << filename << " in "
-        << duration_cast<milliseconds>(end - start).count() / 1000.0
-        << " seconds.\n";
+    auto elapsed = duration_cast<milliseconds>(high_resolution_clock::now() - start).count();
+    cout << "Generated " << filename << " in " << elapsed / 1000.0 << " seconds.\n";
 }
 
-void splitFile(const string& filename) {
-    auto start = high_resolution_clock::now();
-
+//
+// ----------- LOADING STUDENTS INTO A CONTAINER -----------
+//
+template<typename Container>
+Container loadStudents(const string& filename)
+{
     ifstream in(filename);
-    string passedFile = "passed_" + filename;
-    string failedFile = "failed_" + filename;
-
-    ofstream passed(passedFile), failed(failedFile);
-
     string header;
     getline(in, header);
-    passed << header << "\n";
-    failed << header << "\n";
+
+    Container students;
+
+    // try to reserve a sensible starting guess if supported by Container
+    reserve_if_possible(students, 100000);
 
     string name, surname;
-    while (in >> name >> surname) {
-        vector<int> hw(5);
-        for (int i = 0; i < 5; i++) in >> hw[i];
-        int ex; in >> ex;
+    while (in >> name >> surname)
+    {
+        array<int, 5> hw{};
+        for (int i = 0; i < 5; i++)
+            in >> hw[i];
+        int ex;
+        in >> ex;
 
-        double avgHW = accumulate(hw.begin(), hw.end(), 0.0) / hw.size();
-        double finalGrade = 0.4 * avgHW + 0.6 * ex;
-
-        ostream& out = (finalGrade >= 5.0) ? passed : failed;
-        out << name << " " << surname;
-        for (int h : hw) out << " " << h;
-        out << " " << ex << "\n";
+        students.emplace_back(name, surname, hw, ex);
     }
 
-    auto end = high_resolution_clock::now();
-    cout << "Split " << filename << " in "
-        << duration_cast<milliseconds>(end - start).count() / 1000.0
-        << " seconds.\n";
+    return students;
 }
 
-int main() {
+//
+// ----------- STRATEGY 1: COPY INTO TWO CONTAINERS -----------
+//
+template<typename Container>
+void strategy1_split(const string& filename)
+{
+    cout << "Loading " << filename << " into " << typeid(Container).name() << "...\n";
+    auto loadStart = high_resolution_clock::now();
+
+    Container students = loadStudents<Container>(filename);
+
+    auto loadTime = duration_cast<milliseconds>(high_resolution_clock::now() - loadStart).count();
+
+    //
+    // Strategy 1 Split: copy to two new containers
+    //
+    auto splitStart = high_resolution_clock::now();
+
+    Container passed, failed;
+
+    reserve_if_possible(passed, students.size());
+    reserve_if_possible(failed, students.size());
+
+    for (const auto& s : students)
+    {
+        if (s.finalAvg >= 5.0)
+            passed.push_back(s);   // COPY
+        else
+            failed.push_back(s);   // COPY
+    }
+
+    auto splitTime = duration_cast<milliseconds>(high_resolution_clock::now() - splitStart).count();
+
+    cout << "  Load time:  " << loadTime / 1000.0 << " s\n";
+    cout << "  Split time: " << splitTime / 1000.0 << " s\n";
+}
+
+//
+// ----------- MAIN BENCHMARK DRIVER -----------
+//
+int main()
+{
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
     vector<pair<string, long long>> files = {
-        {"Students10k.txt",     10000},
-        {"Students100k.txt",   100000},
-        {"Students1m.txt",    1000000},
-        {"Students10m.txt",  10000000}
+        {"Students10k.txt",   10000},
+        {"Students100k.txt", 100000},
+        {"Students1m.txt",  1000000},
+        {"Students10m.txt",10000000}
     };
 
-    cout << "Generating files...\n";
+    cout << "\n=== Generating files ===\n";
     for (auto& f : files)
         generateFile(f.first, f.second);
 
-    cout << "\nSplitting files...\n";
+    cout << "\n=== Strategy 1: Copy-based Split ===\n";
 
-    for (auto& f : files) {
+    for (auto& f : files)
+    {
         cout << "\n--- " << f.first << " ---\n";
-
-        // vector (original behavior)
-        splitFile(f.first);
-
-        // list
-        splitUsingContainer<list<Person>>(f.first);
-
-        // deque
-        splitUsingContainer<deque<Person>>(f.first);
+        strategy1_split<vector<Person>>(f.first);
+        strategy1_split<list<Person>>(f.first);
+        strategy1_split<deque<Person>>(f.first);
     }
 
-    cout << "\nAll tasks completed.\n";
+    cout << "\nDone.\n";
     return 0;
 }
