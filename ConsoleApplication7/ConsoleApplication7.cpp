@@ -184,5 +184,11 @@ int main()
     }
 
     cout << "\nDone.\n";
+
+    // Wait for the user to press Enter so the console window doesn't close immediately.
+    cout << "Press Enter to exit...";
+    string _pause;
+    getline(cin, _pause);
+
     return 0;
 }
